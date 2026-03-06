@@ -1,23 +1,51 @@
-# Incident Response Copilot
+# The First Five Minutes: Agentic Incident Investigation
 
-A Next.js app for student developers: when your Vercel deployment fails, an AI agent (AWS Bedrock) automatically gathers evidence from Vercel, GitHub, and Supabase, then returns a ranked report of likely causes and fixes.
+When a deployment fails, the first thing an engineer does is **triage the incident**.  
+They open logs, check recent commits, verify database connections, and try to figure out what changed.
 
-**What it solves:** Stops you from manually digging through Vercel logs, GitHub commits, and DB status when a deploy breaks. The AI does the triage and surfaces ranked hypotheses with suggested fixes.
+In real production environments, **on-call engineers often spend the first 30–60 minutes just gathering context** before they can even start fixing the issue.
+
+This project automates **those first five minutes of investigation**.
+
+Incident Response Copilot is an **agentic debugging system** that detects failed Vercel deployments and immediately begins collecting evidence across your stack.
+
+Instead of manually jumping between dashboards, the agent automatically gathers signals from:
+
+- Vercel deployment logs  
+- Vercel deployment history  
+- GitHub commit history  
+- Supabase database health  
+
+It then sends that evidence to **AWS Bedrock (Meta Llama 3)**, which analyzes the signals and produces a **ranked report of likely causes and suggested fixes.**
 
 ---
 
 ## What It Does
 
-You connect your project once via a settings form. The app then:
+You connect your project once through a simple settings form. After that, the system continuously monitors deployments.
 
-1. **Polls Vercel** every N seconds (default 60) to check deployment status.
-2. **Shows your last build** — deployment ID, state (Ready/Error/Building), time ago, and a one-line AI summary so you know it’s working.
-3. **On crash** — when a deployment fails, an AI agent runs in the background, fetches logs from Vercel, recent commits from GitHub (if configured), and DB status from Supabase (if configured), then sends everything to AWS Bedrock.
-4. **Renders a report** — ranked hypotheses with confidence scores and suggested fixes, plus collapsible raw evidence per source.
+When deployments succeed, the dashboard displays the latest build and a short AI-generated summary.
 
-No terminal, no `.env` for project credentials — everything is configured in the UI. Only AWS keys live in `.env` for the AI.
+When a deployment fails, the agent automatically begins an investigation.
 
----
+The system:
+
+- **Polls Vercel periodically** to detect new deployments  
+- **Identifies failed builds** in real time  
+- **Collects debugging evidence** from logs, commits, and database signals  
+- **Runs an AI investigation** using AWS Bedrock  
+- **Generates a structured incident report** with ranked root-cause hypotheses and suggested fixes  
+
+Each report includes:
+
+- Deployment ID and timestamp  
+- Ranked hypotheses with confidence scores  
+- Suggested fixes  
+- Collapsible raw evidence from each source  
+
+The goal is simple: **replace manual log digging with automated incident triage.**
+
+Instead of spending the first hour figuring out *what happened*, engineers immediately see **a prioritized explanation of why the deployment likely failed.**
 
 ## How It Works
 
