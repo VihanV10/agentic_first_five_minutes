@@ -2,6 +2,8 @@
 
 A Next.js app for student developers: when your Vercel deployment fails, an AI agent (AWS Bedrock) automatically gathers evidence from Vercel, GitHub, and Supabase, then returns a ranked report of likely causes and fixes.
 
+**What it solves:** Stops you from manually digging through Vercel logs, GitHub commits, and DB status when a deploy breaks. The AI does the triage and surfaces ranked hypotheses with suggested fixes.
+
 ---
 
 ## What It Does
@@ -119,40 +121,6 @@ npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000). You’ll land on **Settings**: enter at least Vercel token and Project ID, then save. You’re redirected to the dashboard; polling starts and the “Last build” card appears when there’s a deployment.
-
----
-
-## Pushing to GitHub
-
-### Create a new repo (on GitHub)
-
-1. Go to [github.com/new](https://github.com/new).
-2. Name it (e.g. `incident-response-copilot`), leave it empty (no README/license).
-3. Copy the repo URL (e.g. `https://github.com/YOUR_USERNAME/incident-response-copilot.git`).
-
-### Push from this project
-
-```bash
-cd /path/to/incident-response-copilot
-
-# If this folder isn't a git repo yet
-git init
-git remote add origin https://github.com/YOUR_USERNAME/incident-response-copilot.git
-
-# Stage, commit, push
-git add .
-git commit -m "Initial commit: Incident Response Copilot"
-git branch -M main
-git push -u origin main
-```
-
-If already connected to a repo:
-
-```bash
-git add .
-git commit -m "Improve README: add flow, architecture, and usage"
-git push
-```
 
 ---
 
