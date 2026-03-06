@@ -46,6 +46,7 @@ Each report includes:
 The goal is simple: **replace manual log digging with automated incident triage.**
 
 Instead of spending the first hour figuring out *what happened*, engineers immediately see **a prioritized explanation of why the deployment likely failed.**
+---
 
 ## How It Works
 
