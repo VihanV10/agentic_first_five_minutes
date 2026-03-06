@@ -177,8 +177,4 @@ Open [http://localhost:3000](http://localhost:3000). You’ll land on **Settings
 - **Alerts:** Webhooks or notifications (Slack, Discord, email) when a crash is detected.
 - **Report history:** Persist reports in a DB or file store instead of localStorage.
 
----
 
-## License
-
-MIT
