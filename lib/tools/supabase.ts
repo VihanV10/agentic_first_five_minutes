@@ -60,9 +60,3 @@ export async function getDbErrors(
     };
   }
 }
-
-export const supabaseErrorsTool = {
-  name: "get_db_errors",
-  description: "Check Supabase project connection and return any available DB diagnostic info",
-  run: getDbErrors,
-};

@@ -2,10 +2,13 @@ import type { UserConfig, ToolContext, ToolResult } from "@/lib/types";
 
 const VERCEL_API = "https://api.vercel.com";
 
+export type VercelLogsOptions = { limit?: number };
+
 /** Get deployment build/event logs for a given deployment */
 export async function getDeploymentLogs(
   config: UserConfig,
-  context?: ToolContext
+  context?: ToolContext,
+  options?: VercelLogsOptions
 ): Promise<ToolResult> {
   const id = context?.deploymentId;
   if (!id) {
@@ -15,9 +18,13 @@ export async function getDeploymentLogs(
       source: "vercel_logs",
     };
   }
+  const limit = Math.max(
+    1,
+    Math.min(200, Math.floor(options?.limit ?? 100))
+  );
   try {
     const url = new URL(`/v3/deployments/${id}/events`, VERCEL_API);
-    url.searchParams.set("limit", "100");
+    url.searchParams.set("limit", String(limit));
     if (config.vercelTeamId) url.searchParams.set("teamId", config.vercelTeamId);
     const res = await fetch(url.toString(), {
       headers: { Authorization: `Bearer ${config.vercelToken}` },
@@ -51,16 +58,23 @@ export async function getDeploymentLogs(
   }
 }
 
+export type VercelHistoryOptions = { limit?: number };
+
 /** Get recent deployment history for the project */
 export async function getDeploymentHistory(
   config: UserConfig,
-  context?: ToolContext
+  context?: ToolContext,
+  options?: VercelHistoryOptions
 ): Promise<ToolResult> {
   void context;
+  const depLimit = Math.max(
+    1,
+    Math.min(30, Math.floor(options?.limit ?? 10))
+  );
   try {
     const url = new URL("/v6/deployments", VERCEL_API);
     url.searchParams.set("projectId", config.vercelProjectId);
-    url.searchParams.set("limit", "10");
+    url.searchParams.set("limit", String(depLimit));
     if (config.vercelTeamId) url.searchParams.set("teamId", config.vercelTeamId);
     const res = await fetch(url.toString(), {
       headers: { Authorization: `Bearer ${config.vercelToken}` },
@@ -95,15 +109,3 @@ export async function getDeploymentHistory(
     };
   }
 }
-
-export const vercelLogsTool = {
-  name: "get_deployment_logs",
-  description: "Fetch build and runtime logs for a Vercel deployment",
-  run: getDeploymentLogs,
-};
-
-export const vercelHistoryTool = {
-  name: "get_deployment_history",
-  description: "Fetch recent deployment history for the Vercel project",
-  run: getDeploymentHistory,
-};

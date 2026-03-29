@@ -8,7 +8,9 @@ const EVIDENCE_LABELS: Record<string, string> = {
   vercel_history: "Vercel deployment history",
   github_commits: "GitHub recent commits",
   supabase_errors: "Supabase DB status",
+  _bedrock_error: "Bedrock / model error",
   _claude_error: "Claude API error",
+  tool_registry: "Tool registry",
 };
 
 interface ReportCardProps {
@@ -53,6 +55,35 @@ export default function ReportCard({ report }: ReportCardProps) {
           </li>
         ))}
       </ul>
+
+      {report.agentSteps && report.agentSteps.length > 0 && (
+        <>
+          <h3 className="mb-2 text-sm font-semibold text-gray-700 dark:text-gray-300">
+            Agent steps
+          </h3>
+          <ol className="mb-6 list-decimal space-y-1 pl-5 text-sm text-gray-600 dark:text-gray-400">
+            {report.agentSteps.map((s, i) => (
+              <li key={i}>
+                <span className="font-mono text-xs text-gray-800 dark:text-gray-200">
+                  {s.tool}
+                </span>
+                {s.argsSummary ? (
+                  <span className="ml-2 text-xs opacity-80">{s.argsSummary}</span>
+                ) : null}
+                <span
+                  className={
+                    s.ok
+                      ? " ml-2 text-xs text-green-600 dark:text-green-400"
+                      : " ml-2 text-xs text-red-600 dark:text-red-400"
+                  }
+                >
+                  {s.ok ? "ok" : "error"}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </>
+      )}
 
       <h3 className="mb-2 text-sm font-semibold text-gray-700 dark:text-gray-300">
         Raw evidence

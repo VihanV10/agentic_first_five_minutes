@@ -41,7 +41,7 @@ Each report includes:
 - Deployment ID and timestamp  
 - Ranked hypotheses with confidence scores  
 - Suggested fixes  
-- Collapsible raw evidence from each source  
+- Collapsible raw evidence from each source, plus an **agent steps** list when the model used tools  
 
 The goal is simple: **replace manual log digging with automated incident triage.**
 
@@ -78,14 +78,16 @@ Dashboard (client)
     ├─► GET /api/summarize-build?deploymentId=... ──► Vercel logs + Bedrock
     │       └─► Returns: one-line AI summary
     │
-    └─► POST /api/investigate (when crash) ──► Agent runs tools in parallel:
+    └─► POST /api/investigate (when crash) ──► Agentic loop (Bedrock + tools):
             │
-            ├─► get_deployment_logs (Vercel)
-            ├─► get_deployment_history (Vercel)
-            ├─► get_recent_commits (GitHub, if configured)
-            ├─► get_db_errors (Supabase, if configured)
+            ├─► Model chooses MCP-shaped tools (see lib/tool-registry.ts)
+            │       get_deployment_logs, get_deployment_history,
+            │       get_recent_commits (if GitHub configured),
+            │       get_db_errors (if Supabase configured)
             │
-            └─► All evidence → Bedrock → ranked hypotheses
+            ├─► Tool results appended to transcript; repeat until final JSON
+            │
+            └─► Ranked hypotheses (+ agent step log on the report)
 ```
 
 Credentials are stored in **localStorage** and sent in request headers on every API call. The server never stores them.
@@ -94,7 +96,7 @@ Credentials are stored in **localStorage** and sent in request headers on every 
 
 - **Settings:** Single form — Vercel (token, project ID, team ID), GitHub (token, owner, repo), Supabase (URL, service key), polling interval. Only Vercel is required.
 - **Dashboard:** Connection badges (Vercel / GitHub / Supabase), app status (All Good / Investigating… / Crash Detected), Last build card, Latest report (when a crash was investigated), Report history list.
-- **Report card:** Crash timestamp, deployment ID, ranked causes with confidence % and suggested fix, collapsible raw evidence per source.
+- **Report card:** Crash timestamp, deployment ID, ranked causes with confidence % and suggested fix, optional ordered agent steps, collapsible raw evidence per source.
 
 ---
 
@@ -139,6 +141,9 @@ AWS_REGION=us-east-1
 AWS_ACCESS_KEY_ID=your_access_key
 AWS_SECRET_ACCESS_KEY=your_secret_key
 BEDROCK_MODEL_ID=meta.llama3-8b-instruct-v1:0
+
+# Optional: cap multi-turn tool rounds per investigation (default 10, max 20)
+# AGENT_MAX_STEPS=10
 ```
 
 Create keys in AWS Console → IAM → Users → Security credentials → Create access key. The user needs `bedrock:InvokeModel` (e.g. `AmazonBedrockFullAccess` or a minimal policy).
@@ -164,14 +169,44 @@ Open [http://localhost:3000](http://localhost:3000). You’ll land on **Settings
 | `app/api/summarize-build/route.ts` | One-line AI build summary |
 | `app/api/status/route.ts` | Connection checks (Vercel/GitHub/Supabase) |
 | `app/api/tools/*` | Proxies to Vercel/GitHub/Supabase tools |
-| `lib/agent.ts` | Bedrock + MCP-style tools orchestration |
-| `lib/tools/` | vercel, github, supabase tools |
+| `lib/tool-registry.ts` | MCP-shaped tool definitions + dispatch |
+| `lib/agent.ts` | Bedrock agent loop (tool_calls / final JSON) |
+| `lib/tools/` | vercel, github, supabase API helpers |
+| `scripts/mcp-server.ts` | Optional stdio MCP server for Cursor / other hosts |
+
+---
+
+## MCP server (Cursor / IDE)
+
+The same tools are available over **stdio MCP** for local agents. Credentials come from the **shell environment** (not from the web app’s localStorage).
+
+1. Set at least `VERCEL_TOKEN` and `VERCEL_PROJECT_ID` (and optional `VERCEL_TEAM_ID`, `GITHUB_TOKEN`, `GITHUB_OWNER`, `GITHUB_REPO`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`).
+2. For `get_deployment_logs`, pass `deployment_id` in the tool arguments (or set `MCP_DEFAULT_DEPLOYMENT_ID`). Optional: `MCP_DEFAULT_CRASH_TIMESTAMP_MS` for commit window context.
+3. Run from the repo root: `npm run mcp:server` (uses `tsx`).
+
+Example **Cursor** `mcp.json` fragment:
+
+```json
+{
+  "mcpServers": {
+    "first-five-minutes": {
+      "command": "npx",
+      "args": ["tsx", "--tsconfig", "tsconfig.json", "scripts/mcp-server.ts"],
+      "cwd": "/absolute/path/to/first_five_minutes_cursor",
+      "env": {
+        "VERCEL_TOKEN": "...",
+        "VERCEL_PROJECT_ID": "..."
+      }
+    }
+  }
+}
+```
 
 ---
 
 ## Future / roadmap
 
-- **MCP server:** Expose the same tools (Vercel logs/history, GitHub commits, Supabase check) via an MCP server so other agents or IDEs can call them.
+- **More MCP transports:** HTTP/SSE if you need remote hosts.
 - **More integrations:** Sentry, Datadog, LogRocket, Axiom — pull in error logs and traces.
 - **More runtimes:** Netlify, Railway, Fly.io — support deployment targets beyond Vercel.
 - **Alerts:** Webhooks or notifications (Slack, Discord, email) when a crash is detected.

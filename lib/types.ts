@@ -25,10 +25,10 @@ export type ToolResult = {
   source: string;
 };
 
-export type MCPTool = {
-  name: string;
-  description: string;
-  run: (config: UserConfig, context?: ToolContext) => Promise<ToolResult>;
+export type AgentInvestigationStep = {
+  tool: string;
+  argsSummary: string;
+  ok: boolean;
 };
 
 export type Hypothesis = {
@@ -45,6 +45,8 @@ export type InvestigationReport = {
   hypotheses: Hypothesis[];
   evidence: Record<string, ToolResult>;
   createdAt: string;
+  /** Ordered record of tool calls the agent made (when using the agentic loop). */
+  agentSteps?: AgentInvestigationStep[];
 };
 
 /** Header names used to pass credentials from frontend to API routes */

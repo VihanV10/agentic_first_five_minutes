@@ -59,9 +59,3 @@ export async function getRecentCommits(
     };
   }
 }
-
-export const githubCommitsTool = {
-  name: "get_recent_commits",
-  description: "Fetch recent Git commits for the repo around the crash time",
-  run: getRecentCommits,
-};

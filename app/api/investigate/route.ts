@@ -29,7 +29,7 @@ export async function POST(request: Request) {
   }
   const crashTimestamp = body.crashTimestamp ?? Date.now();
 
-  const { hypotheses, evidence } = await runInvestigation(
+  const { hypotheses, evidence, agentSteps } = await runInvestigation(
     config,
     deploymentId,
     crashTimestamp
@@ -43,6 +43,7 @@ export async function POST(request: Request) {
     hypotheses,
     evidence,
     createdAt: new Date().toISOString(),
+    agentSteps,
   };
 
   return NextResponse.json(report);
