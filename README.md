@@ -1,118 +1,100 @@
-# The First Five Minutes: Agentic Incident Investigation
+# The First Five Minutes
 
-When a deployment fails, the first thing an engineer does is **triage the incident**.  
-They open logs, check recent commits, verify database connections, and try to figure out what changed.
-
-In real production environments, **on-call engineers often spend the first 30–60 minutes just gathering context** before they can even start fixing the issue.
-
-This project automates **those first five minutes of investigation**.
-
-Incident Response Copilot is an **agentic debugging system** that detects failed Vercel deployments and immediately begins collecting evidence across your stack.
-
-Instead of manually jumping between dashboards, the agent automatically gathers signals from:
-
-- Vercel deployment logs  
-- Vercel deployment history  
-- GitHub commit history  
-- Supabase database health  
-
-It then sends that evidence to **AWS Bedrock (Meta Llama 3)**, which analyzes the signals and produces a **ranked report of likely causes and suggested fixes.**
+**Agentic, MCP-aligned incident triage for failed Vercel deployments.** The model does not guess in a vacuum: it **chooses tools**, reads real signals from your stack, and only then ranks causes and fixes.
 
 ---
 
-## What It Does
+## The problem
 
-You connect your project once through a simple settings form. After that, the system continuously monitors deployments.
+When a deploy goes red, engineering time is burned in two places.
 
-When deployments succeed, the dashboard displays the latest build and a short AI-generated summary.
+**1. Context tax.** Someone opens Vercel logs, scrolls build output, checks whether the last merge changed dependencies, maybe peeks at Supabase or the database. None of that is “fixing” yet. It is **reconstructing reality** from disconnected dashboards. In many teams the **first 30–60 minutes** are mostly navigation and correlation, not code changes.
 
-When a deployment fails, the agent automatically begins an investigation.
+**2. Single-shot “AI” does not help enough.** A typical pattern is: fetch everything in parallel, stuff it into one prompt, ask the model once. That is fast, but the model **cannot adapt**. It cannot decide “logs are noisy, widen deployment history” or “error is clearly build-time, skip DB checks.” You pay for tokens on data the model never needed, and you still miss the right slice of evidence.
 
-The system:
+This project targets the **first five minutes of that funnel**: automated triage that behaves more like a careful on-call engineer—**observe, act, observe again**—until it can justify a ranked report.
 
-- **Polls Vercel periodically** to detect new deployments  
-- **Identifies failed builds** in real time  
-- **Collects debugging evidence** from logs, commits, and database signals  
-- **Runs an AI investigation** using AWS Bedrock  
-- **Generates a structured incident report** with ranked root-cause hypotheses and suggested fixes  
-
-Each report includes:
-
-- Deployment ID and timestamp  
-- Ranked hypotheses with confidence scores  
-- Suggested fixes  
-- Collapsible raw evidence from each source, plus an **agent steps** list when the model used tools  
-
-The goal is simple: **replace manual log digging with automated incident triage.**
-
-Instead of spending the first hour figuring out *what happened*, engineers immediately see **a prioritized explanation of why the deployment likely failed.**
 ---
 
-## How It Works
+## What we built
 
-### User flow
+A small **Next.js dashboard** watches your project’s deployments. On success you get a short AI summary of the build. On failure it triggers an **investigation**: a **bounded multi-turn loop** where **AWS Bedrock (Llama 3-class instruct)** either requests **tool calls** or returns a **final** structured verdict (hypotheses, confidence, suggested fixes).
+
+Evidence and **ordered agent steps** (which tools ran, whether they succeeded) surface in the UI so you can trust the path, not only the conclusion.
+
+Credentials for Vercel (and optional GitHub / Supabase) live in the **browser** and are sent as **HTTP headers** to your API routes. The server does **not** persist them.
+
+---
+
+## MCP: why it matters here
+
+[**Model Context Protocol (MCP)**](https://modelcontextprotocol.io/) is an open way to expose **tools** to AI clients: each tool has a **name**, **human-readable description**, and **JSON Schema** for arguments. Hosts (IDEs, assistants, or your own backend) call `tools/list` and `tools/call` over a transport (commonly **stdio** for local processes).
+
+This codebase does **not** only bolt on MCP as an afterthought. Tools are defined **once** in [`lib/tool-registry.ts`](lib/tool-registry.ts) in that **MCP-shaped** form. That gives you:
+
+| Layer | Role |
+|--------|------|
+| **Tool registry** | Single source of truth: schemas + executors (Vercel logs/history, GitHub commits, Supabase probe). |
+| **Web investigation agent** | Bedrock reads the same catalog, emits JSON `tool_calls` or `final`, server runs tools and appends results to the transcript—**same contracts** as MCP. |
+| **Optional stdio MCP server** | [`scripts/mcp-server.ts`](scripts/mcp-server.ts) exposes those tools to **Cursor** (or any MCP host) via env-based config, without duplicating integration logic. |
+
+So: **MCP is the contract; the agent is the reasoning loop that uses that contract.** The web app and the MCP server are two **hosts** for the same tool surface.
+
+---
+
+## Agent: how the loop actually works
+
+A **true** agent loop is more than “call an API with a big prompt.” Here the server repeats until one of these happens:
+
+1. The model returns **`{"final":{"hypotheses":[...]}}`** (ranked causes, confidence, fixes).  
+2. The model returns **`{"tool_calls":[{"name","arguments"}, ...]}`** → the server executes each via the registry, **appends truncated tool output** to the transcript, and **invokes the model again**.  
+3. A configurable **step cap** is hit (`AGENT_MAX_STEPS`, default 10, max 20). Then a **synthesis** pass runs: all collected evidence is sent in one prompt so you still get hypotheses instead of an abrupt stop.
+
+The model uses **JSON-only** tool protocol (works well with Llama 3 instruct on Bedrock). If you later move to a model with native tool APIs (for example Bedrock Converse with tool config), you can swap the **transport** around the same registry.
+
+**Why this is “deeper” than batch-and-pray:** the model can **sequence** evidence (logs first, then history, then commits), **stop early** when signal is clear, and **avoid** optional integrations when they are irrelevant—within the step and payload limits you set for serverless safety.
+
+---
+
+## User flow
 
 ```
-First visit → Settings page (credentials form)
-     ↓
-Save (Vercel token + Project ID required; GitHub & Supabase optional)
-     ↓
-Redirect to Dashboard
-     ↓
-Polling starts immediately
-     ↓
-Last build card appears (deployment ID, state, AI one-liner)
-     ↓
-If latest deployment state = ERROR → "Investigating..." → Report card appears
+Settings (credentials) → Dashboard → Poll Vercel every N seconds
+    → Latest deployment card + optional AI one-liner
+    → If state = ERROR → POST /api/investigate → Report (hypotheses + agent steps + raw evidence)
 ```
 
-### Data flow
+---
+
+## Data flow (compact)
 
 ```
-Dashboard (client)
-    │
-    ├─► GET /api/poll (every N sec) ──► Vercel API (list deployments)
-    │       │
-    │       └─► Returns: crashDetected?, latestDeployment
-    │
-    ├─► GET /api/summarize-build?deploymentId=... ──► Vercel logs + Bedrock
-    │       └─► Returns: one-line AI summary
-    │
-    └─► POST /api/investigate (when crash) ──► Agentic loop (Bedrock + tools):
-            │
-            ├─► Model chooses MCP-shaped tools (see lib/tool-registry.ts)
-            │       get_deployment_logs, get_deployment_history,
-            │       get_recent_commits (if GitHub configured),
-            │       get_db_errors (if Supabase configured)
-            │
-            ├─► Tool results appended to transcript; repeat until final JSON
-            │
-            └─► Ranked hypotheses (+ agent step log on the report)
+Browser                          Next.js API
+   │                                    │
+   ├─ GET /api/poll ───────────────────► Vercel: list deployments
+   ├─ GET /api/summarize-build ────────► Vercel logs + Bedrock (one line)
+   └─ POST /api/investigate ───────────► Agent loop:
+                                         Bedrock ↔ tool registry
+                                         (vercel logs/history, github, supabase)
+                                         → hypotheses + evidence + agentSteps
 ```
-
-Credentials are stored in **localStorage** and sent in request headers on every API call. The server never stores them.
-
-### What you see
-
-- **Settings:** Single form — Vercel (token, project ID, team ID), GitHub (token, owner, repo), Supabase (URL, service key), polling interval. Only Vercel is required.
-- **Dashboard:** Connection badges (Vercel / GitHub / Supabase), app status (All Good / Investigating… / Crash Detected), Last build card, Latest report (when a crash was investigated), Report history list.
-- **Report card:** Crash timestamp, deployment ID, ranked causes with confidence % and suggested fix, optional ordered agent steps, collapsible raw evidence per source.
 
 ---
 
 ## Stack
 
-- Next.js 14 (App Router), TypeScript, Tailwind CSS
-- AWS Bedrock (Meta Llama 3) for investigation and build summary
-- Optional: Vercel API, GitHub API, Supabase (only Vercel required)
+- **Next.js 14** (App Router), TypeScript, Tailwind  
+- **AWS Bedrock** — investigation loop + build summary  
+- **Integrations** — Vercel API (required for core flow), GitHub & Supabase optional  
+- **@modelcontextprotocol/sdk** — stdio MCP server in `scripts/`
 
 ---
 
 ## Prerequisites
 
-- **Vercel:** API token, Project ID (and optional Team ID) from [vercel.com](https://vercel.com)
-- **AWS:** Access key and secret for Bedrock (for investigation + build summary)
-- **Optional:** GitHub token + repo owner/name; Supabase project URL + service role key
+- **Vercel:** API token, project ID, optional team ID — [vercel.com](https://vercel.com)  
+- **AWS:** IAM user with `bedrock:InvokeModel` (and keys in `.env`)  
+- **Optional:** GitHub token + `owner/repo`; Supabase URL + service role key  
 
 ---
 
@@ -121,20 +103,16 @@ Credentials are stored in **localStorage** and sent in request headers on every 
 ### 1. Clone and install
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/incident-response-copilot.git
-cd incident-response-copilot
+git clone https://github.com/VihanV10/agentic_first_five_minutes.git
+cd agentic_first_five_minutes
 npm install
 ```
 
-### 2. AWS (Bedrock)
-
-Copy the example env file and set your AWS credentials and model:
+### 2. Environment (Bedrock)
 
 ```bash
 cp .env.example .env
 ```
-
-Edit `.env`:
 
 ```env
 AWS_REGION=us-east-1
@@ -142,11 +120,9 @@ AWS_ACCESS_KEY_ID=your_access_key
 AWS_SECRET_ACCESS_KEY=your_secret_key
 BEDROCK_MODEL_ID=meta.llama3-8b-instruct-v1:0
 
-# Optional: cap multi-turn tool rounds per investigation (default 10, max 20)
+# Optional: tool rounds per investigation (default 10, max 20)
 # AGENT_MAX_STEPS=10
 ```
-
-Create keys in AWS Console → IAM → Users → Security credentials → Create access key. The user needs `bedrock:InvokeModel` (e.g. `AmazonBedrockFullAccess` or a minimal policy).
 
 ### 3. Run
 
@@ -154,7 +130,7 @@ Create keys in AWS Console → IAM → Users → Security credentials → Create
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). You’ll land on **Settings**: enter at least Vercel token and Project ID, then save. You’re redirected to the dashboard; polling starts and the “Last build” card appears when there’s a deployment.
+Open [http://localhost:3000](http://localhost:3000), complete **Settings**, then use the dashboard.
 
 ---
 
@@ -162,29 +138,32 @@ Open [http://localhost:3000](http://localhost:3000). You’ll land on **Settings
 
 | Path | Purpose |
 |------|---------|
-| `app/page.tsx` | Dashboard: polling, last build, reports |
-| `app/settings/page.tsx` | Credentials form |
-| `app/api/poll/route.ts` | Vercel status + latest deployment |
-| `app/api/investigate/route.ts` | Run agent, return report |
-| `app/api/summarize-build/route.ts` | One-line AI build summary |
-| `app/api/status/route.ts` | Connection checks (Vercel/GitHub/Supabase) |
-| `app/api/tools/*` | Proxies to Vercel/GitHub/Supabase tools |
-| `lib/tool-registry.ts` | MCP-shaped tool definitions + dispatch |
-| `lib/agent.ts` | Bedrock agent loop (tool_calls / final JSON) |
-| `lib/tools/` | vercel, github, supabase API helpers |
-| `scripts/mcp-server.ts` | Optional stdio MCP server for Cursor / other hosts |
+| [`app/page.tsx`](app/page.tsx) | Dashboard: polling, builds, reports |
+| [`app/settings/page.tsx`](app/settings/page.tsx) | Credentials |
+| [`app/api/investigate/route.ts`](app/api/investigate/route.ts) | Runs `runInvestigation`, returns report + `agentSteps` |
+| [`lib/tool-registry.ts`](lib/tool-registry.ts) | MCP-shaped tool definitions and `executeRegisteredTool` |
+| [`lib/agent.ts`](lib/agent.ts) | Bedrock agent loop (`tool_calls` / `final`) + synthesis fallback |
+| [`lib/tools/`](lib/tools/) | Raw API helpers (Vercel, GitHub, Supabase) |
+| [`scripts/mcp-server.ts`](scripts/mcp-server.ts) | Stdio MCP server for Cursor / other MCP clients |
 
 ---
 
-## MCP server (Cursor / IDE)
+## MCP server (Cursor and other hosts)
 
-The same tools are available over **stdio MCP** for local agents. Credentials come from the **shell environment** (not from the web app’s localStorage).
+For **IDE-native** agents, run the same tools over MCP. Configure **environment variables** (not browser localStorage):
 
-1. Set at least `VERCEL_TOKEN` and `VERCEL_PROJECT_ID` (and optional `VERCEL_TEAM_ID`, `GITHUB_TOKEN`, `GITHUB_OWNER`, `GITHUB_REPO`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`).
-2. For `get_deployment_logs`, pass `deployment_id` in the tool arguments (or set `MCP_DEFAULT_DEPLOYMENT_ID`). Optional: `MCP_DEFAULT_CRASH_TIMESTAMP_MS` for commit window context.
-3. Run from the repo root: `npm run mcp:server` (uses `tsx`).
+- Required for most tools: `VERCEL_TOKEN`, `VERCEL_PROJECT_ID`  
+- Optional: `VERCEL_TEAM_ID`, `GITHUB_*`, `SUPABASE_*`  
+- For log tool defaults: `MCP_DEFAULT_DEPLOYMENT_ID`, `MCP_DEFAULT_CRASH_TIMESTAMP_MS`  
+- `get_deployment_logs` also accepts `deployment_id` in the tool **arguments**
 
-Example **Cursor** `mcp.json` fragment:
+From the repo root:
+
+```bash
+npm run mcp:server
+```
+
+**Cursor** (`mcp.json` example — set `cwd` to your machine’s path):
 
 ```json
 {
@@ -192,7 +171,7 @@ Example **Cursor** `mcp.json` fragment:
     "first-five-minutes": {
       "command": "npx",
       "args": ["tsx", "--tsconfig", "tsconfig.json", "scripts/mcp-server.ts"],
-      "cwd": "/absolute/path/to/first_five_minutes_cursor",
+      "cwd": "/absolute/path/to/agentic_first_five_minutes",
       "env": {
         "VERCEL_TOKEN": "...",
         "VERCEL_PROJECT_ID": "..."
@@ -204,12 +183,9 @@ Example **Cursor** `mcp.json` fragment:
 
 ---
 
-## Future / roadmap
+## Roadmap (ideas)
 
-- **More MCP transports:** HTTP/SSE if you need remote hosts.
-- **More integrations:** Sentry, Datadog, LogRocket, Axiom — pull in error logs and traces.
-- **More runtimes:** Netlify, Railway, Fly.io — support deployment targets beyond Vercel.
-- **Alerts:** Webhooks or notifications (Slack, Discord, email) when a crash is detected.
-- **Report history:** Persist reports in a DB or file store instead of localStorage.
-
-
+- MCP over **HTTP/SSE** for remote or hosted clients  
+- More signal sources (Sentry, Datadog, Axiom, …) as additional registry tools  
+- Deploy targets beyond Vercel  
+- Alerts (Slack, webhooks) and durable report storage outside `localStorage`  
